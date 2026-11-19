@@ -40,7 +40,7 @@ def classify(title):
  best=max(scores,key=scores.get)
  return best if scores[best] else None
 def eligibility(text):
- if any(k in text for k in ('仅限本科生','本科生专属','仅限博士','博士生专属','MBA专属','MPAcc专属','仅限专业学位')):
+ if any(k in text for k in ('仅限本科生','本科生专属','本科生“','本科生\"','本科生学科竞赛','仅限博士','博士生专属','MBA专属','MPAcc专属','仅限专业学位')):
   return '明显不适用'
  return '适用资格需核实'
 def fetch(url):
@@ -62,6 +62,12 @@ def listing(source):
   if not valid(link) or link==source['url']:continue
   row=' '.join((a.parent or a).stripped_strings)[:300]
   published=dateval(row)
+  # Listing rows sometimes carry only a day and month (e.g. '21 2026-10').
+  if not published:
+   lm=re.search(r'(?<!\\d)([0-3]?\\d)\\s+(20\\d{2})[-./](\\d{1,2})(?!\\d)',row)
+   if lm:
+    try:published=date(int(lm.group(2)),int(lm.group(3)),int(lm.group(1))).isoformat()
+    except ValueError:pass
   # Avoid claiming dates not present on the listing; article page may supply date.
   out[link]={'title':title,'url':link,'source':source['name'],
    'priority':source.get('priority',1),'category':cat,'published':published,
@@ -84,6 +90,8 @@ def enrich(n):
   m=DEADLINE.search(text)
   if m:
    n['deadline']=dateval(m.group(1),int(n['published'][:4]) if n['published'] else NOW.year)
+   # Ignore suspicious historic year mismatches until manually verified.
+   if n['deadline'] and n['published'] and n['deadline'][:4]!=n['published'][:4]:n['deadline']=''
    n['deadline_evidence']=text[max(0,m.start()-15):m.end()+12][:110]
  except Exception as e:print('DETAIL ERROR',n['url'],repr(e)[:140])
  return n
@@ -114,6 +122,15 @@ def main():
  cutoff=(NOW.date()-timedelta(days=365)).isoformat()
  notices=[x for x in saved.values() if not x.get('published') or x['published']>=cutoff]
  notices.sort(key=lambda x:(x.get('published',''),x.get('first_seen','')),reverse=True)
+ for n in notices:
+  n['eligibility']=eligibility(n.get('title',''))
+  # For events, the event date is not a publication date; correct obvious confusion.
+  if n.get('published') and any(w in n.get('title','') for w in ('报告时间','讲座时间')):
+   n['published']=''
+  # Evidence from a different year is not a reliable current deadline.
+  ev=n.get('deadline_evidence','')
+  if n.get('deadline') and re.search(r'20\\s*2\\s*5',ev) and n['deadline'].startswith('2026'):
+   n['deadline']=''
  out={'updated':NOW.strftime('%Y-%m-%d %H:%M 北京时间'),'updated_iso':NOW.isoformat(),
   'notices':notices[:1200],'new_count':len(fresh),'sources':sources,'errors':errors,'mode':'public-only'}
  DB.parent.mkdir(exist_ok=True)
